@@ -492,7 +492,7 @@ main()
   configuration = cfg_new_snippet(VERSION_VALUE);
   configuration->stats_options.level = 1;
   assert_true(cfg_init(configuration), "cfg_init failed!");
-  plugin_load_module("syslogformat", configuration, NULL);
+  cfg_load_module(configuration, "syslogformat");
   msg_format_options_defaults(&parse_options);
   msg_format_options_init(&parse_options, configuration);
 

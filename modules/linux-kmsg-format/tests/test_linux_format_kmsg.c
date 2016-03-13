@@ -174,7 +174,7 @@ void
 init_and_load_kmsgformat_module()
 {
   configuration = cfg_new_snippet(VERSION_VALUE);
-  plugin_load_module("linux-kmsg-format", configuration, NULL);
+  cfg_load_module(configuration, "linux-kmsg-format");
   parse_options.format = "linux-kmsg";
 
   msg_format_options_defaults(&parse_options);

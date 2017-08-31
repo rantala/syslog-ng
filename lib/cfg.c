@@ -188,8 +188,14 @@ cfg_load_module(GlobalConfig *cfg, const gchar *module_name)
 void
 cfg_load_candidate_modules(GlobalConfig *self)
 {
-  _sync_plugin_module_path_with_global_define(self);
-  plugin_load_candidate_modules(&self->plugin_context);
+  gboolean autoload_enabled = atoi(cfg_args_get(self->lexer->globals, "autoload-compiled-modules") ? : "1");
+
+  if (self->use_plugin_discovery &&
+      autoload_enabled)
+    {
+      _sync_plugin_module_path_with_global_define(self);
+      plugin_load_candidate_modules(&self->plugin_context);
+    }
 }
 
 Plugin *
@@ -377,7 +383,7 @@ cfg_register_builtin_plugins(GlobalConfig *self)
 }
 
 GlobalConfig *
-cfg_new_snippet(gint version)
+cfg_new(gint version)
 {
   GlobalConfig *self = g_new0(GlobalConfig, 1);
 
@@ -418,16 +424,18 @@ cfg_new_snippet(gint version)
 
   cfg_tree_init_instance(&self->tree, self);
   plugin_context_init_instance(&self->plugin_context);
+  self->use_plugin_discovery = TRUE;
 
   cfg_register_builtin_plugins(self);
   return self;
 }
 
 GlobalConfig *
-cfg_new(gint version)
+cfg_new_snippet(gint version)
 {
-  GlobalConfig *self = cfg_new_snippet(version);
-  cfg_load_candidate_modules(self);
+  GlobalConfig *self = cfg_new(version);
+
+  self->use_plugin_discovery = FALSE;
   return self;
 }
 

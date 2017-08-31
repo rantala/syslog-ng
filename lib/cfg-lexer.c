@@ -949,6 +949,8 @@ relex:
           cfg_set_version(configuration, 0x0201);
         }
 
+      cfg_load_candidate_modules(configuration);
+
 #if (!SYSLOG_NG_ENABLE_FORCED_SERVER_MODE)
       if (!plugin_load_module("license", configuration, NULL))
         {

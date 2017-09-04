@@ -26,7 +26,6 @@
 #include "cfg-lexer.h"
 #include "messages.h"
 #include "plugin.h"
-#include "plugin-types.h"
 
 #include <string.h>
 #include <errno.h>
@@ -111,7 +110,7 @@ confgen_exec_new(gint context, const gchar *name, const gchar *exec)
 }
 
 gboolean
-confgen_module_init(GlobalConfig *cfg, CfgArgs *args)
+confgen_module_init(PluginContext *plugin_context, CfgArgs *args)
 {
   const gchar *name, *context, *exec;
 
@@ -133,9 +132,7 @@ confgen_module_init(GlobalConfig *cfg, CfgArgs *args)
       msg_error("confgen: exec argument expected");
       return FALSE;
     }
-  cfg_lexer_register_block_generator(cfg->lexer,
-                                     confgen_exec_new(cfg_lexer_lookup_context_type_by_name(context),
-                                                      name, exec));
+  cfg_lexer_register_generator_plugin(plugin_context, confgen_exec_new(cfg_lexer_lookup_context_type_by_name(context), name, exec));
   return TRUE;
 }
 

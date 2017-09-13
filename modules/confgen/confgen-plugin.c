@@ -47,7 +47,8 @@ confgen_exec_generate(CfgBlockGenerator *s, GlobalConfig *cfg, CfgLexer *lexer, 
   gchar buf[256];
   gboolean result;
 
-  g_snprintf(buf, sizeof(buf), "%s confgen %s", cfg_lexer_lookup_context_name_by_type(self->super.context), self->super.name);
+  g_snprintf(buf, sizeof(buf), "%s confgen %s", cfg_lexer_lookup_context_name_by_type(self->super.context),
+             self->super.name);
   if (!cfg_args_validate(args, NULL, buf))
     {
       msg_error("confgen: confgen invocations do not process arguments, but your argument list is not empty",
@@ -132,7 +133,8 @@ confgen_module_init(PluginContext *plugin_context, CfgArgs *args)
       msg_error("confgen: exec argument expected");
       return FALSE;
     }
-  cfg_lexer_register_generator_plugin(plugin_context, confgen_exec_new(cfg_lexer_lookup_context_type_by_name(context), name, exec));
+  cfg_lexer_register_generator_plugin(plugin_context, confgen_exec_new(cfg_lexer_lookup_context_type_by_name(context),
+                                      name, exec));
   return TRUE;
 }
 

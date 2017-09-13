@@ -632,7 +632,8 @@ cfg_lexer_include_buffer(CfgLexer *self, const gchar *name, const gchar *buffer,
   GError *error = NULL;
   gboolean result = FALSE;
 
-  substituted_buffer = cfg_lexer_subst_args_in_input(self->globals, NULL, NULL, buffer, length, &substituted_length, &error);
+  substituted_buffer = cfg_lexer_subst_args_in_input(self->globals, NULL, NULL, buffer, length, &substituted_length,
+                                                     &error);
   if (!substituted_buffer)
     {
       msg_error("Error resolving backtick references in block or buffer",
@@ -887,7 +888,8 @@ relex:
       self->preprocess_suppress_tokens--;
       goto relex;
     }
-  else if (tok == LL_IDENTIFIER && (gen = cfg_lexer_find_generator(self, configuration, cfg_lexer_get_context_type(self), yylval->cptr)))
+  else if (tok == LL_IDENTIFIER
+           && (gen = cfg_lexer_find_generator(self, configuration, cfg_lexer_get_context_type(self), yylval->cptr)))
     {
       CfgArgs *args;
 

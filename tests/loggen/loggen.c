@@ -39,6 +39,7 @@
 #include <string.h>
 #include <glib.h>
 #include <signal.h>
+#include <math.h>
 
 #include <openssl/crypto.h>
 #include <openssl/x509.h>
@@ -47,6 +48,8 @@
 #include <openssl/err.h>
 
 #include <unistd.h>
+
+#include <systemd/sd-journal.h>
 
 #define MAX_MESSAGE_LENGTH 8192
 
@@ -74,6 +77,7 @@ int quiet = 0;
 int syslog_proto = 0;
 int framing = 1;
 int usessl = 0;
+int use_journal = 0;
 int skip_tokens = 3;
 char *read_file = NULL;
 int idle_connections = 0;
@@ -85,9 +89,18 @@ char *sdata_value = NULL;
 int permanent = 0;
 
 /* results */
-guint64 sum_count;
 struct timeval sum_time;
 gint raw_message_length;
+
+static gint log2_latencies[64];
+
+static unsigned long long now_msec()
+{
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
+    abort();
+  return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 typedef ssize_t (*send_data_t)(void *user_data, void *buf, size_t length);
 
@@ -123,6 +136,30 @@ send_plain(void *user_data, void *buf, size_t length)
         return -1;
     }
   return (cc);
+}
+
+static ssize_t
+send_sd_journal(void *user_data, void *buf, size_t length)
+{
+  unsigned long long t1, t2;
+  int r, latency_bucket;
+
+  t1 = now_msec();
+  r = sd_journal_print(LOG_INFO, (const char *)buf);
+  t2 = now_msec();
+
+  if (r < 0)
+    return r;
+
+  latency_bucket = t2-t1 > 0 ? (int)log2(t2-t1) : 0;
+  if (latency_bucket < 0 || latency_bucket >= 64) {
+    fprintf(stderr, "errrr, latency_bucket=%d t2=%llu t1=%llu\n", latency_bucket, t2, t1);
+    abort();
+  }
+
+  g_atomic_int_inc(&log2_latencies[latency_bucket]);
+
+  return length;
 }
 
 static ssize_t
@@ -534,7 +571,7 @@ gen_messages(send_data_t send_func, void *send_func_ud, int thread_id, FILE *rea
       rc = write_chunk(send_func, send_func_ud, linebuf, linelen);
       if (rc < 0)
         {
-          fprintf(stderr, "Send error %s, results may be skewed.\n", strerror(errno));
+          fprintf(stderr, "Send error %d: '%s', results may be skewed.\n", errno, strerror(errno));
           break;
         }
       buckets--;
@@ -598,6 +635,12 @@ gen_messages_plain(int sock, int id, FILE *readfrom)
   return gen_messages(send_plain, GINT_TO_POINTER(sock), id, readfrom);
 }
 
+static guint64
+gen_messages_sd_journal(int sock, int id, FILE *readfrom)
+{
+  return gen_messages(send_sd_journal, GINT_TO_POINTER(sock), id, readfrom);
+}
+
 GMutex *thread_lock;
 GCond *thread_cond;
 GCond *thread_finished;
@@ -649,9 +692,13 @@ active_thread(gpointer st)
   struct timeval start, end, diff_tv;
   FILE *readfrom = NULL;
 
-  sock = connect_server();
-  if (sock < 0)
-    goto error;
+  if (use_journal)
+    sock = -1;
+  else {
+    sock = connect_server();
+    if (sock < 0)
+      goto error;
+  }
   g_mutex_lock(thread_lock);
   connect_finished++;
   if (connect_finished == active_connections + idle_connections)
@@ -682,8 +729,14 @@ active_thread(gpointer st)
     }
 
   gettimeofday(&start, NULL);
-  count = (usessl ? gen_messages_ssl : gen_messages_plain)(sock, id, readfrom);
-  shutdown(sock, SHUT_RDWR);
+  if (use_journal)
+    count = gen_messages_sd_journal(sock, id, readfrom);
+  else if (usessl)
+    count = gen_messages_ssl(sock, id, readfrom);
+  else
+    count = gen_messages_plain(sock, id, readfrom);
+  if (sock >= 0)
+    shutdown(sock, SHUT_RDWR);
   gettimeofday(&end, NULL);
   time_val_diff_in_timeval(&diff_tv, &end, &start);
 
@@ -694,7 +747,8 @@ active_thread(gpointer st)
   if (active_finished == active_connections)
     g_cond_signal(thread_finished);
   g_mutex_unlock(thread_lock);
-  close(sock);
+  if (sock >= 0)
+    close(sock);
   if (readfrom && readfrom != stdin)
     fclose(readfrom);
   return NULL;
@@ -725,6 +779,7 @@ static GOptionEntry loggen_options[] =
   { "active-connections", 0, 0, G_OPTION_ARG_INT, &active_connections, "Number of active connections to the server (default = 1)", "<number>" },
   { "idle-connections", 0, 0, G_OPTION_ARG_INT, &idle_connections, "Number of inactive connections to the server (default = 0)", "<number>" },
   { "use-ssl", 'U', 0, G_OPTION_ARG_NONE, &usessl, "Use ssl layer", NULL },
+  { "use-journal", 'J', 0, G_OPTION_ARG_NONE, &use_journal, "Use systemd journal", NULL },
   { "read-file", 'R', 0, G_OPTION_ARG_STRING, &read_file, "Read log messages from file", "<filename>" },
   { "loop-reading", 'l', 0, G_OPTION_ARG_NONE, &loop_reading, "Read the file specified in read-file option in loop (it will restart the reading if reached the end of the file)", NULL },
   { "skip-tokens", 0, 0, G_OPTION_ARG_INT, &skip_tokens, "Skip the given number of tokens (delimined by a space) at the beginning of each line (default value: 3)", "<number>" },
@@ -756,7 +811,7 @@ main(int argc, char *argv[])
   int ret = 0;
   GError *error = NULL;
   GOptionContext *ctx = NULL;
-  int i;
+  int i, total;
   guint64 diff_usec;
   GOptionGroup *group;
 
@@ -831,7 +886,7 @@ main(int argc, char *argv[])
       fprintf(stderr, "Error: trying to use SSL on a Unix Domain Socket\n");
       return 1;
     }
-  if (!unix_socket)
+  if (!unix_socket && !use_journal)
     {
       if (argc < 2)
         {
@@ -885,7 +940,7 @@ main(int argc, char *argv[])
 #endif
         }
     }
-  else
+  else if (!use_journal)
     {
       static struct sockaddr_un saun;
 
@@ -960,6 +1015,17 @@ main(int argc, char *argv[])
           (double) sum_count * USEC_PER_SEC / diff_usec, sum_count, sum_time.tv_sec, sum_time.tv_usec / 1000, raw_message_length,
           (double) sum_count * raw_message_length * (USEC_PER_SEC / 1024) / diff_usec);
 
+  fprintf(stderr, "\nLatency distribution:\n");
+  for (i = 0, total = 0; i < 63; ++i) {
+    fprintf(stderr, " %5llu ms ... %5llu ms : %d\n",
+        (i == 0 ? 0LL : 1ULL << i),
+        (1ULL << (i+1)) - 1,
+        log2_latencies[i]);
+    total += log2_latencies[i];
+    if (total == sum_count)
+      break;
+  }
+
 stop_and_exit:
   if (usessl)
     crypto_deinit();
@@ -972,3 +1038,5 @@ stop_and_exit:
 
   return ret;
 }
+
+/* vim: set et ts=2 sw=2: */

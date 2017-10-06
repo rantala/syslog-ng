@@ -102,6 +102,19 @@ static unsigned long long now_msec()
   return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+static void log_latency(unsigned long long t)
+{
+  int latency_bucket;
+
+  latency_bucket = t > 0 ? (int)log2(t) : 0;
+  if (latency_bucket < 0 || latency_bucket >= 64) {
+    fprintf(stderr, "errrr, latency_bucket=%d t=%llu\n", latency_bucket, t);
+    abort();
+  }
+
+  g_atomic_int_inc(&log2_latencies[latency_bucket]);
+}
+
 typedef ssize_t (*send_data_t)(void *user_data, void *buf, size_t length);
 
 static ssize_t
@@ -141,23 +154,12 @@ send_plain(void *user_data, void *buf, size_t length)
 static ssize_t
 send_sd_journal(void *user_data, void *buf, size_t length)
 {
-  unsigned long long t1, t2;
-  int r, latency_bucket;
+  int r;
 
-  t1 = now_msec();
   r = sd_journal_print(LOG_INFO, (const char *)buf);
-  t2 = now_msec();
 
   if (r < 0)
     return r;
-
-  latency_bucket = t2-t1 > 0 ? (int)log2(t2-t1) : 0;
-  if (latency_bucket < 0 || latency_bucket >= 64) {
-    fprintf(stderr, "errrr, latency_bucket=%d t2=%llu t1=%llu\n", latency_bucket, t2, t1);
-    abort();
-  }
-
-  g_atomic_int_inc(&log2_latencies[latency_bucket]);
 
   return length;
 }
@@ -203,7 +205,9 @@ write_chunk(send_data_t send_func, void *send_func_ud, void *buf, size_t buf_len
 {
   ssize_t rc;
   size_t pos = 0;
+  unsigned long long t1, t2;
 
+  t1 = now_msec();
   while (pos < buf_len)
     {
       rc = send_func(send_func_ud, buf + pos, buf_len - pos);
@@ -218,6 +222,14 @@ write_chunk(send_data_t send_func, void *send_func_ud, void *buf, size_t buf_len
         }
       pos += rc;
     }
+  t2 = now_msec();
+
+  if (t2 < t1) {
+    fprintf(stderr, "errrr, t2=%llu < t1=%llu\n", t2, t1);
+    abort();
+  }
+  log_latency(t2-t1);
+
   return pos;
 }
 
